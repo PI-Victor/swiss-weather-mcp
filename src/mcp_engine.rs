@@ -348,7 +348,7 @@ pub fn tools_list_response(id: serde_json::Value) -> McpResponse {
         },
         ToolInfo {
             name: "get_local_forecast".to_string(),
-            description: "Get the latest MeteoSwiss local forecast for a point with a daily summary and hourly breakdown. The response includes temperature, precipitation totals and probability, wind, gusts, wind direction, cloud cover, sunshine duration, global radiation, diffuse radiation, and weather icon codes.\n\nParameters:\n- point_query: point ID, station abbreviation, postal code, or point name\n- hours: Optional number of hourly forecast timestamps to return (default 24)."
+            description: "Get the latest MeteoSwiss local forecast for a point with a daily summary and hourly breakdown. The response includes temperature, precipitation totals and probability, wind, gusts, wind direction, cloud cover, sunshine duration, global radiation, diffuse radiation, weather icon codes, Copernicus UV, and current FOEN NABEL pollutant measurements for the nearest official station.\n\nParameters:\n- point_query: point ID, station abbreviation, postal code, or point name\n- hours: Optional number of hourly forecast timestamps to return (default 24)."
                 .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",

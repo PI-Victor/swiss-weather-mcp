@@ -13,10 +13,13 @@ const LOCAL_FORECAST_COLLECTION_ID: &str = "ch.meteoschweiz.ogd-local-forecastin
 const LOCAL_FORECAST_POINT_METADATA_URL: &str =
     "https://data.geo.admin.ch/ch.meteoschweiz.ogd-local-forecasting/ogd-local-forecasting_meta_point.csv";
 const CAMS_WMS_URL: &str = "https://eccharts.ecmwf.int/wms/";
+const NABEL_CURRENT_TABLE_URL: &str = "https://bafu.meteotest.ch/nabel/tables/show/english";
 const UV_INDEX_UNAVAILABLE: &str =
     "Copernicus CAMS UV lookup is unavailable for this point or time window.";
 const AIR_QUALITY_AQI_UNAVAILABLE: &str =
-    "No verified official AQI feed has been integrated. The checked NABEL source exposes station-network metadata, not a ready-made AQI forecast or measurement layer.";
+    "No verified official AQI feed has been integrated. Current official NABEL pollutant measurements are available separately in summary.air_quality_current.";
+const AIR_QUALITY_CURRENT_UNAVAILABLE: &str =
+    "Official FOEN NABEL current pollutant measurements are unavailable for this point or time window.";
 
 struct CurrentLayerSpec {
     dataset_path: &'static str,
@@ -61,6 +64,129 @@ struct CamsFeatureInfo {
     grid_point_latitude: f64,
     grid_point_longitude: f64,
 }
+
+struct NabelStationMetadata {
+    id: &'static str,
+    station_name: &'static str,
+    lv03_east: f64,
+    lv03_north: f64,
+}
+
+#[derive(Debug, PartialEq)]
+struct NabelCurrentTable {
+    reported_at: String,
+    records: Vec<NabelCurrentRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct NabelCurrentRecord {
+    site_type: String,
+    station_name: String,
+    o3_ug_m3: Option<f64>,
+    o3_daily_max_ug_m3: Option<f64>,
+    no2_ug_m3: Option<f64>,
+    pm10_ug_m3: Option<f64>,
+    pm2_5_ug_m3: Option<f64>,
+}
+
+const NABEL_STATIONS: &[NabelStationMetadata] = &[
+    NabelStationMetadata {
+        id: "BAS",
+        station_name: "Basel-Binningen",
+        lv03_east: 610890.0,
+        lv03_north: 265605.0,
+    },
+    NabelStationMetadata {
+        id: "BER",
+        station_name: "Bern-Bollwerk",
+        lv03_east: 600170.0,
+        lv03_north: 199990.0,
+    },
+    NabelStationMetadata {
+        id: "CHA",
+        station_name: "Chaumont",
+        lv03_east: 565090.0,
+        lv03_north: 211040.0,
+    },
+    NabelStationMetadata {
+        id: "DAV",
+        station_name: "Davos-Seehornwald",
+        lv03_east: 784450.0,
+        lv03_north: 187735.0,
+    },
+    NabelStationMetadata {
+        id: "DUE",
+        station_name: "Duebendorf-Empa",
+        lv03_east: 688675.0,
+        lv03_north: 250900.0,
+    },
+    NabelStationMetadata {
+        id: "HAE",
+        station_name: "Haerkingen-A1",
+        lv03_east: 628875.0,
+        lv03_north: 240185.0,
+    },
+    NabelStationMetadata {
+        id: "JUN",
+        station_name: "Jungfraujoch",
+        lv03_east: 641910.0,
+        lv03_north: 155280.0,
+    },
+    NabelStationMetadata {
+        id: "LAE",
+        station_name: "Laegeren",
+        lv03_east: 669780.0,
+        lv03_north: 259020.0,
+    },
+    NabelStationMetadata {
+        id: "LAU",
+        station_name: "Lausanne-Cesar-Roux",
+        lv03_east: 538695.0,
+        lv03_north: 152615.0,
+    },
+    NabelStationMetadata {
+        id: "LUG",
+        station_name: "Lugano-Universita",
+        lv03_east: 717615.0,
+        lv03_north: 96645.0,
+    },
+    NabelStationMetadata {
+        id: "MAG",
+        station_name: "Magadino-Cadenazzo",
+        lv03_east: 715500.0,
+        lv03_north: 113200.0,
+    },
+    NabelStationMetadata {
+        id: "PAY",
+        station_name: "Payerne",
+        lv03_east: 562285.0,
+        lv03_north: 184775.0,
+    },
+    NabelStationMetadata {
+        id: "RIG",
+        station_name: "Rigi-Seebodenalp",
+        lv03_east: 677835.0,
+        lv03_north: 213440.0,
+    },
+    NabelStationMetadata {
+        id: "SIO",
+        station_name: "Sion-Aeroport-A9",
+        lv03_east: 592540.0,
+        lv03_north: 118755.0,
+    },
+    NabelStationMetadata {
+        id: "TAE",
+        station_name: "Taenikon",
+        lv03_east: 710500.0,
+        lv03_north: 259810.0,
+    },
+    NabelStationMetadata {
+        id: "ZUE",
+        station_name: "Zurich-Kaserne",
+        lv03_east: 682450.0,
+        lv03_north: 247990.0,
+    },
+];
 
 const HOURLY_FORECAST_BUNDLE: &[ForecastBundleParameter] = &[
     ForecastBundleParameter {
@@ -679,9 +805,15 @@ async fn get_local_forecast(point_query: &str, hours: Option<u64>) -> Result<Val
     }
 
     let uv_index = fetch_cams_uv_index_summary(&point, &daily_summary).await;
-    let air_quality = unavailable_metric(AIR_QUALITY_AQI_UNAVAILABLE);
-    let summary = build_forecast_summary(&hourly_breakdown, uv_index.clone(), air_quality.clone());
-    let unsupported = build_unsupported(&uv_index, &air_quality);
+    let air_quality_current = fetch_nabel_air_quality_current(&point).await;
+    let air_quality_aqi = unavailable_metric(AIR_QUALITY_AQI_UNAVAILABLE);
+    let summary = build_forecast_summary(
+        &hourly_breakdown,
+        uv_index.clone(),
+        air_quality_current.clone(),
+        air_quality_aqi.clone(),
+    );
+    let unsupported = build_unsupported(&uv_index, &air_quality_current, &air_quality_aqi);
 
     Ok(json!({
         "source_collection": LOCAL_FORECAST_COLLECTION_ID,
@@ -701,7 +833,8 @@ async fn get_local_forecast(point_query: &str, hours: Option<u64>) -> Result<Val
 fn build_forecast_summary(
     hourly_breakdown: &[Value],
     uv_index: Value,
-    air_quality: Value,
+    air_quality_current: Value,
+    air_quality_aqi: Value,
 ) -> Value {
     json!({
         "temperature_2m_c": numeric_summary(hourly_breakdown, "temperature_2m_c"),
@@ -718,7 +851,8 @@ fn build_forecast_summary(
             "high": numeric_summary(hourly_breakdown, "high_cloud_cover"),
         },
         "uv_index": uv_index,
-        "air_quality_aqi": air_quality,
+        "air_quality_current": air_quality_current,
+        "air_quality_aqi": air_quality_aqi,
     })
 }
 
@@ -729,7 +863,11 @@ fn unavailable_metric(reason: &str) -> Value {
     })
 }
 
-fn build_unsupported(uv_index: &Value, air_quality: &Value) -> Value {
+fn build_unsupported(
+    uv_index: &Value,
+    air_quality_current: &Value,
+    air_quality_aqi: &Value,
+) -> Value {
     let mut unsupported = Map::new();
 
     if !uv_index
@@ -746,14 +884,28 @@ fn build_unsupported(uv_index: &Value, air_quality: &Value) -> Value {
         );
     }
 
-    if !air_quality
+    if !air_quality_current
+        .get("available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        unsupported.insert(
+            "air_quality_current".to_string(),
+            air_quality_current
+                .get("reason")
+                .cloned()
+                .unwrap_or_else(|| json!(AIR_QUALITY_CURRENT_UNAVAILABLE)),
+        );
+    }
+
+    if !air_quality_aqi
         .get("available")
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
         unsupported.insert(
             "air_quality_aqi".to_string(),
-            air_quality
+            air_quality_aqi
                 .get("reason")
                 .cloned()
                 .unwrap_or_else(|| json!(AIR_QUALITY_AQI_UNAVAILABLE)),
@@ -761,6 +913,270 @@ fn build_unsupported(uv_index: &Value, air_quality: &Value) -> Value {
     }
 
     Value::Object(unsupported)
+}
+
+async fn fetch_nabel_air_quality_current(point: &ForecastPoint) -> Value {
+    match try_fetch_nabel_air_quality_current(point).await {
+        Ok(summary) => summary,
+        Err(error) => unavailable_metric(&format!("{} {}", AIR_QUALITY_CURRENT_UNAVAILABLE, error)),
+    }
+}
+
+async fn try_fetch_nabel_air_quality_current(point: &ForecastPoint) -> Result<Value> {
+    let point_east = point
+        .point_coordinates_lv95_east
+        .ok_or_else(|| anyhow!("Point metadata does not include LV95 east coordinate"))?;
+    let point_north = point
+        .point_coordinates_lv95_north
+        .ok_or_else(|| anyhow!("Point metadata does not include LV95 north coordinate"))?;
+
+    let html = fetch_text(NABEL_CURRENT_TABLE_URL).await?;
+    let table = parse_nabel_current_table(&html)?;
+
+    let mut nearest_record = None;
+    let mut nearest_metadata = None;
+    let mut nearest_distance_km = f64::INFINITY;
+
+    for record in &table.records {
+        let Some(metadata) = nabel_station_metadata(&record.station_name) else {
+            continue;
+        };
+
+        let station_east = lv03_to_lv95(metadata.lv03_east);
+        let station_north = lv03_to_lv95(metadata.lv03_north);
+        let distance_km =
+            euclidean_distance_km(point_east, point_north, station_east, station_north);
+
+        if distance_km < nearest_distance_km {
+            nearest_distance_km = distance_km;
+            nearest_record = Some(record);
+            nearest_metadata = Some(metadata);
+        }
+    }
+
+    let record = nearest_record.ok_or_else(|| {
+        anyhow!("No current NABEL record matched the official station coordinate metadata")
+    })?;
+    let metadata = nearest_metadata.ok_or_else(|| {
+        anyhow!("No current NABEL station metadata matched the nearest pollutant record")
+    })?;
+
+    Ok(json!({
+        "available": true,
+        "reported_at": table.reported_at,
+        "source": {
+            "provider": "FOEN NABEL",
+            "service": "Current situation table",
+            "url": NABEL_CURRENT_TABLE_URL,
+        },
+        "nearest_station": {
+            "id": metadata.id,
+            "station_name": record.station_name,
+            "site_type": record.site_type,
+            "distance_km": round_to_precision(nearest_distance_km, 1),
+            "coordinates_lv95": {
+                "east": round_to_precision(lv03_to_lv95(metadata.lv03_east), 1),
+                "north": round_to_precision(lv03_to_lv95(metadata.lv03_north), 1),
+            },
+        },
+        "measurements_ug_m3": {
+            "o3": record.o3_ug_m3.map(|value| round_to_precision(value, 1)),
+            "o3_daily_max": record
+                .o3_daily_max_ug_m3
+                .map(|value| round_to_precision(value, 1)),
+            "no2": record.no2_ug_m3.map(|value| round_to_precision(value, 1)),
+            "pm10": record.pm10_ug_m3.map(|value| round_to_precision(value, 1)),
+            "pm2_5": record.pm2_5_ug_m3.map(|value| round_to_precision(value, 1)),
+        },
+    }))
+}
+
+fn parse_nabel_current_table(html: &str) -> Result<NabelCurrentTable> {
+    let caption_html = extract_tag_contents(html, "caption")
+        .ok_or_else(|| anyhow!("NABEL current table is missing a <caption>"))?;
+    let reported_at = collapse_whitespace(&strip_html_tags(&decode_html_entities(&caption_html)));
+
+    let tbody_html = extract_tag_contents(html, "tbody")
+        .ok_or_else(|| anyhow!("NABEL current table is missing a <tbody>"))?;
+    let mut records = Vec::new();
+
+    for row_html in extract_table_rows(&tbody_html) {
+        let cells = extract_table_cells(&row_html)
+            .into_iter()
+            .map(|cell| collapse_whitespace(&strip_html_tags(&decode_html_entities(&cell))))
+            .collect::<Vec<_>>();
+
+        if cells.len() < 7 {
+            continue;
+        }
+
+        records.push(NabelCurrentRecord {
+            site_type: cells[0].clone(),
+            station_name: cells[1].clone(),
+            o3_ug_m3: parse_optional_f64(&cells[2])?,
+            o3_daily_max_ug_m3: parse_optional_f64(&cells[3])?,
+            no2_ug_m3: parse_optional_f64(&cells[4])?,
+            pm10_ug_m3: parse_optional_f64(&cells[5])?,
+            pm2_5_ug_m3: parse_optional_f64(&cells[6])?,
+        });
+    }
+
+    if records.is_empty() {
+        bail!("NABEL current table did not contain any measurement rows");
+    }
+
+    Ok(NabelCurrentTable {
+        reported_at,
+        records,
+    })
+}
+
+fn extract_tag_contents(text: &str, tag_name: &str) -> Option<String> {
+    let open_tag_start = text.find(&format!("<{}", tag_name))?;
+    let open_tag_end = text[open_tag_start..].find('>')? + open_tag_start + 1;
+    let close_tag_start = text[open_tag_end..].find(&format!("</{}>", tag_name))? + open_tag_end;
+    Some(text[open_tag_end..close_tag_start].to_string())
+}
+
+fn extract_table_rows(tbody_html: &str) -> Vec<String> {
+    tbody_html
+        .split("<tr")
+        .skip(1)
+        .filter_map(|fragment| {
+            let row_start = fragment.find('>')? + 1;
+            let row_end = fragment.find("</tr>")?;
+            Some(fragment[row_start..row_end].to_string())
+        })
+        .collect()
+}
+
+fn extract_table_cells(row_html: &str) -> Vec<String> {
+    row_html
+        .split("<td")
+        .skip(1)
+        .filter_map(|fragment| {
+            let cell_start = fragment.find('>')? + 1;
+            let cell_end = fragment.find("</td>")?;
+            Some(fragment[cell_start..cell_end].to_string())
+        })
+        .collect()
+}
+
+fn decode_html_entities(text: &str) -> String {
+    text.replace("&nbsp;", " ")
+        .replace("&uuml;", "ü")
+        .replace("&Uuml;", "Ü")
+        .replace("&ouml;", "ö")
+        .replace("&Ouml;", "Ö")
+        .replace("&auml;", "ä")
+        .replace("&Auml;", "Ä")
+        .replace("&agrave;", "à")
+        .replace("&Agrave;", "À")
+        .replace("&eacute;", "é")
+        .replace("&Eacute;", "É")
+        .replace("&egrave;", "è")
+        .replace("&Egrave;", "È")
+        .replace("&ecirc;", "ê")
+        .replace("&Ecirc;", "Ê")
+        .replace("&ccedil;", "ç")
+        .replace("&amp;", "&")
+}
+
+fn strip_html_tags(text: &str) -> String {
+    let mut output = String::new();
+    let mut in_tag = false;
+
+    for character in text.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => output.push(character),
+            _ => {}
+        }
+    }
+
+    output
+}
+
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn parse_optional_f64(text: &str) -> Result<Option<f64>> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed == "-" {
+        return Ok(None);
+    }
+
+    trimmed
+        .parse::<f64>()
+        .map(Some)
+        .with_context(|| format!("Invalid numeric measurement '{}'", trimmed))
+}
+
+fn nabel_station_metadata(station_name: &str) -> Option<&'static NabelStationMetadata> {
+    let normalized = normalize_station_name(station_name);
+    NABEL_STATIONS
+        .iter()
+        .find(|metadata| normalize_station_name(metadata.station_name) == normalized)
+}
+
+fn normalize_station_name(text: &str) -> String {
+    let mut normalized = String::new();
+    let mut previous_was_separator = false;
+
+    for character in text.chars() {
+        let mapped = match character {
+            'a'..='z' | '0'..='9' => Some(character.to_string()),
+            'A'..='Z' => Some(character.to_ascii_lowercase().to_string()),
+            'ä' | 'Ä' => Some("ae".to_string()),
+            'ö' | 'Ö' => Some("oe".to_string()),
+            'ü' | 'Ü' => Some("ue".to_string()),
+            'à' | 'á' | 'â' | 'ã' | 'å' | 'À' | 'Á' | 'Â' | 'Ã' | 'Å' => {
+                Some("a".to_string())
+            }
+            'ç' | 'Ç' => Some("c".to_string()),
+            'è' | 'é' | 'ê' | 'ë' | 'È' | 'É' | 'Ê' | 'Ë' => Some("e".to_string()),
+            'ì' | 'í' | 'î' | 'ï' | 'Ì' | 'Í' | 'Î' | 'Ï' => Some("i".to_string()),
+            'ñ' | 'Ñ' => Some("n".to_string()),
+            'ò' | 'ó' | 'ô' | 'õ' | 'Ò' | 'Ó' | 'Ô' | 'Õ' => Some("o".to_string()),
+            'ù' | 'ú' | 'û' | 'Ù' | 'Ú' | 'Û' => Some("u".to_string()),
+            'ý' | 'ÿ' | 'Ý' => Some("y".to_string()),
+            '\'' | '’' => None,
+            '-' | '/' | ' ' => Some("-".to_string()),
+            _ => None,
+        };
+
+        match mapped.as_deref() {
+            Some("-") if !previous_was_separator && !normalized.is_empty() => {
+                normalized.push('-');
+                previous_was_separator = true;
+            }
+            Some(value) if value != "-" => {
+                normalized.push_str(value);
+                previous_was_separator = false;
+            }
+            _ => {}
+        }
+    }
+
+    normalized.trim_matches('-').to_string()
+}
+
+fn lv03_to_lv95(value: f64) -> f64 {
+    if value >= 1_000_000.0 {
+        value
+    } else if value < 200_000.0 {
+        value + 1_000_000.0
+    } else {
+        value + 2_000_000.0
+    }
+}
+
+fn euclidean_distance_km(east_a: f64, north_a: f64, east_b: f64, north_b: f64) -> f64 {
+    let east_delta = east_a - east_b;
+    let north_delta = north_a - north_b;
+    (east_delta.mul_add(east_delta, north_delta * north_delta)).sqrt() / 1000.0
 }
 
 fn numeric_summary(rows: &[Value], field_name: &str) -> Value {
@@ -1590,8 +2006,20 @@ mod tests {
                 "mean": 4.4
             }
         });
-        let air_quality = unavailable_metric(AIR_QUALITY_AQI_UNAVAILABLE);
-        let summary = build_forecast_summary(&hourly_breakdown, uv_index, air_quality);
+        let air_quality_current = json!({
+            "available": true,
+            "measurements_ug_m3": {
+                "o3": 68.0,
+                "pm10": 13.0,
+            }
+        });
+        let air_quality_aqi = unavailable_metric(AIR_QUALITY_AQI_UNAVAILABLE);
+        let summary = build_forecast_summary(
+            &hourly_breakdown,
+            uv_index,
+            air_quality_current,
+            air_quality_aqi,
+        );
         assert_eq!(summary["temperature_2m_c"]["min"], json!(10.0));
         assert_eq!(summary["temperature_2m_c"]["max"], json!(14.0));
         assert_eq!(summary["precipitation_hourly_mm"]["total"], json!(1.2));
@@ -1603,9 +2031,70 @@ mod tests {
         );
         assert_eq!(summary["uv_index"]["available"], json!(true));
         assert_eq!(summary["uv_index"]["daily_max_summary"]["max"], json!(5.2));
+        assert_eq!(summary["air_quality_current"]["available"], json!(true));
+        assert_eq!(
+            summary["air_quality_current"]["measurements_ug_m3"]["o3"],
+            json!(68.0)
+        );
         assert_eq!(
             summary["air_quality_aqi"]["reason"],
             json!(AIR_QUALITY_AQI_UNAVAILABLE)
+        );
+    }
+
+    #[test]
+    fn test_parse_nabel_current_table_parses_rows_and_timestamp() {
+        let html = r#"
+<table>
+  <caption>
+    Data from:
+    19.04.2026 23:00
+  </caption>
+  <tbody>
+    <tr>
+      <td>Urban, traffic</td>
+      <td>Bern-Bollwerk</td>
+      <td>68</td>
+      <td>88</td>
+      <td>10</td>
+      <td>13</td>
+      <td>6</td>
+    </tr>
+    <tr>
+      <td>Urban</td>
+      <td>Lugano-Universit&agrave;</td>
+      <td>42</td>
+      <td>111</td>
+      <td>9</td>
+      <td>18</td>
+      <td>10</td>
+    </tr>
+  </tbody>
+</table>
+"#;
+
+        let table = parse_nabel_current_table(html).unwrap();
+        assert_eq!(table.reported_at, "Data from: 19.04.2026 23:00");
+        assert_eq!(table.records.len(), 2);
+        assert_eq!(table.records[0].station_name, "Bern-Bollwerk");
+        assert_eq!(table.records[0].o3_ug_m3, Some(68.0));
+        assert_eq!(table.records[1].station_name, "Lugano-Università");
+        assert_eq!(table.records[1].pm2_5_ug_m3, Some(10.0));
+    }
+
+    #[test]
+    fn test_normalize_station_name_matches_ascii_and_accented_variants() {
+        assert_eq!(
+            normalize_station_name("Lugano-Universita"),
+            normalize_station_name("Lugano-Università")
+        );
+        assert_eq!(
+            normalize_station_name("Lausanne-Cesar-Roux"),
+            normalize_station_name("Lausanne-César-Roux")
+        );
+        assert_eq!(
+            normalize_station_name("Duebendorf-Empa"),
+            normalize_station_name("Dübendorf-Empa")
         );
     }
 
