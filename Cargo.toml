@@ -2,6 +2,11 @@
 name = "swiss-weather-mcp"
 version = "0.1.0"
 edition = "2021"
+description = "MCP server for Swiss weather, pollen, radiation, UV, and air-quality data"
+license = "Apache-2.0"
+readme = "README.md"
+homepage = "https://github.com/pi-victor/swiss-weather-mcp"
+repository = "https://github.com/pi-victor/swiss-weather-mcp"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

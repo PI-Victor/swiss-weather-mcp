@@ -4,6 +4,14 @@
 
 The server reads one JSON-RPC request per line from `stdin` and writes one JSON-RPC response per line to `stdout`.
 
+Repository and homepage:
+
+- <https://github.com/pi-victor/swiss-weather-mcp>
+
+License:
+
+- Apache-2.0
+
 ## What It Provides
 
 This server currently exposes these tools:
@@ -635,6 +643,5 @@ The current implementation has unit tests for:
 
 - `src/main.rs`: request handling, tool implementations, forecast parsing, UV and air-quality integration, tests
 - `src/mcp_engine.rs`: MCP protocol types, tool metadata, shared CSV and source types
-- `tests/fixtures/`: integration fixtures
 - `Cargo.toml`: dependencies and crate metadata
-
+- `README.md`: package readme and user-facing project documentation
