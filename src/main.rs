@@ -16,6 +16,8 @@ const CAMS_WMS_URL: &str = "https://eccharts.ecmwf.int/wms/";
 const NABEL_CURRENT_TABLE_URL: &str = "https://bafu.meteotest.ch/nabel/tables/show/english";
 const UV_INDEX_UNAVAILABLE: &str =
     "Copernicus CAMS UV lookup is unavailable for this point or time window.";
+const POLLEN_CURRENT_UNAVAILABLE: &str =
+    "Official MeteoSwiss pollen measurements are unavailable for this point or time window.";
 const AIR_QUALITY_AQI_UNAVAILABLE: &str =
     "No verified official AQI feed has been integrated. Current official NABEL pollutant measurements are available separately in summary.air_quality_current.";
 const AIR_QUALITY_CURRENT_UNAVAILABLE: &str =
@@ -53,6 +55,12 @@ struct ForecastBundleParameter {
     unit: &'static str,
 }
 
+#[derive(Clone, Copy)]
+struct PollenSpeciesSpec {
+    key: &'static str,
+    dataset_path: &'static str,
+}
+
 #[derive(Debug, PartialEq)]
 struct CamsFeatureInfo {
     layer_name: String,
@@ -76,6 +84,13 @@ struct NabelStationMetadata {
 struct NabelCurrentTable {
     reported_at: String,
     records: Vec<NabelCurrentRecord>,
+}
+
+struct PollenStationMetadata {
+    id: String,
+    station_name: String,
+    latitude: f64,
+    longitude: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -185,6 +200,37 @@ const NABEL_STATIONS: &[NabelStationMetadata] = &[
         station_name: "Zurich-Kaserne",
         lv03_east: 682450.0,
         lv03_north: 247990.0,
+    },
+];
+
+const POLLEN_SPECIES: &[PollenSpeciesSpec] = &[
+    PollenSpeciesSpec {
+        key: "alder",
+        dataset_path: "ch.meteoschweiz.messwerte-pollen-erle-1h",
+    },
+    PollenSpeciesSpec {
+        key: "ash",
+        dataset_path: "ch.meteoschweiz.messwerte-pollen-esche-1h",
+    },
+    PollenSpeciesSpec {
+        key: "beech",
+        dataset_path: "ch.meteoschweiz.messwerte-pollen-buche-1h",
+    },
+    PollenSpeciesSpec {
+        key: "birch",
+        dataset_path: "ch.meteoschweiz.messwerte-pollen-birke-1h",
+    },
+    PollenSpeciesSpec {
+        key: "grass",
+        dataset_path: "ch.meteoschweiz.messwerte-pollen-graeser-1h",
+    },
+    PollenSpeciesSpec {
+        key: "hazel",
+        dataset_path: "ch.meteoschweiz.messwerte-pollen-hasel-1h",
+    },
+    PollenSpeciesSpec {
+        key: "oak",
+        dataset_path: "ch.meteoschweiz.messwerte-pollen-eiche-1h",
     },
 ];
 
@@ -756,17 +802,16 @@ async fn get_pollen_measurement(species: &str, station_id: Option<&str>) -> Resu
     .await
 }
 
+fn pollen_species_spec(species: &str) -> Result<PollenSpeciesSpec> {
+    POLLEN_SPECIES
+        .iter()
+        .copied()
+        .find(|spec| spec.key == species.trim().to_ascii_lowercase())
+        .ok_or_else(|| anyhow!("Unsupported pollen species: {}", species))
+}
+
 fn pollen_dataset_path(species: &str) -> Result<&'static str> {
-    match species.trim().to_ascii_lowercase().as_str() {
-        "alder" => Ok("ch.meteoschweiz.messwerte-pollen-erle-1h"),
-        "ash" => Ok("ch.meteoschweiz.messwerte-pollen-esche-1h"),
-        "beech" => Ok("ch.meteoschweiz.messwerte-pollen-buche-1h"),
-        "birch" => Ok("ch.meteoschweiz.messwerte-pollen-birke-1h"),
-        "grass" => Ok("ch.meteoschweiz.messwerte-pollen-graeser-1h"),
-        "hazel" => Ok("ch.meteoschweiz.messwerte-pollen-hasel-1h"),
-        "oak" => Ok("ch.meteoschweiz.messwerte-pollen-eiche-1h"),
-        other => bail!("Unsupported pollen species: {}", other),
-    }
+    pollen_species_spec(species).map(|spec| spec.dataset_path)
 }
 
 // ── Local forecast ──────────────────────────────────────────────────────────
@@ -805,15 +850,22 @@ async fn get_local_forecast(point_query: &str, hours: Option<u64>) -> Result<Val
     }
 
     let uv_index = fetch_cams_uv_index_summary(&point, &daily_summary).await;
+    let pollen_current = fetch_pollen_current(&point).await;
     let air_quality_current = fetch_nabel_air_quality_current(&point).await;
     let air_quality_aqi = unavailable_metric(AIR_QUALITY_AQI_UNAVAILABLE);
     let summary = build_forecast_summary(
         &hourly_breakdown,
         uv_index.clone(),
+        pollen_current.clone(),
         air_quality_current.clone(),
         air_quality_aqi.clone(),
     );
-    let unsupported = build_unsupported(&uv_index, &air_quality_current, &air_quality_aqi);
+    let unsupported = build_unsupported(
+        &uv_index,
+        &pollen_current,
+        &air_quality_current,
+        &air_quality_aqi,
+    );
 
     Ok(json!({
         "source_collection": LOCAL_FORECAST_COLLECTION_ID,
@@ -833,6 +885,7 @@ async fn get_local_forecast(point_query: &str, hours: Option<u64>) -> Result<Val
 fn build_forecast_summary(
     hourly_breakdown: &[Value],
     uv_index: Value,
+    pollen_current: Value,
     air_quality_current: Value,
     air_quality_aqi: Value,
 ) -> Value {
@@ -851,6 +904,7 @@ fn build_forecast_summary(
             "high": numeric_summary(hourly_breakdown, "high_cloud_cover"),
         },
         "uv_index": uv_index,
+        "pollen_current": pollen_current,
         "air_quality_current": air_quality_current,
         "air_quality_aqi": air_quality_aqi,
     })
@@ -865,6 +919,7 @@ fn unavailable_metric(reason: &str) -> Value {
 
 fn build_unsupported(
     uv_index: &Value,
+    pollen_current: &Value,
     air_quality_current: &Value,
     air_quality_aqi: &Value,
 ) -> Value {
@@ -898,6 +953,20 @@ fn build_unsupported(
         );
     }
 
+    if !pollen_current
+        .get("available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        unsupported.insert(
+            "pollen_current".to_string(),
+            pollen_current
+                .get("reason")
+                .cloned()
+                .unwrap_or_else(|| json!(POLLEN_CURRENT_UNAVAILABLE)),
+        );
+    }
+
     if !air_quality_aqi
         .get("available")
         .and_then(Value::as_bool)
@@ -913,6 +982,161 @@ fn build_unsupported(
     }
 
     Value::Object(unsupported)
+}
+
+async fn fetch_pollen_current(point: &ForecastPoint) -> Value {
+    match try_fetch_pollen_current(point).await {
+        Ok(summary) => summary,
+        Err(error) => unavailable_metric(&format!("{} {}", POLLEN_CURRENT_UNAVAILABLE, error)),
+    }
+}
+
+async fn try_fetch_pollen_current(point: &ForecastPoint) -> Result<Value> {
+    let point_latitude = point
+        .point_coordinates_wgs84_lat
+        .ok_or_else(|| anyhow!("Point metadata does not include WGS84 latitude"))?;
+    let point_longitude = point
+        .point_coordinates_wgs84_lon
+        .ok_or_else(|| anyhow!("Point metadata does not include WGS84 longitude"))?;
+
+    let station = nearest_pollen_station(point_latitude, point_longitude).await?;
+    let mut measurements = Map::new();
+    let mut reference_timestamp = None;
+    let mut source_urls = Vec::new();
+    let mut supported_species = 0usize;
+
+    for spec in POLLEN_SPECIES {
+        let url = current_layer_file_url(spec.dataset_path);
+        let dataset: mcp_engine::GeoJsonDataset = fetch_json(&url).await?;
+        let feature = dataset
+            .features
+            .iter()
+            .find(|feature| feature.id.eq_ignore_ascii_case(&station.id))
+            .or_else(|| {
+                dataset.features.iter().find(|feature| {
+                    normalize_station_name(&feature.properties.station_name)
+                        == normalize_station_name(&station.station_name)
+                })
+            });
+
+        let measurement = feature
+            .map(build_pollen_measurement_summary)
+            .unwrap_or(Value::Null);
+
+        if reference_timestamp.is_none() {
+            reference_timestamp = measurement
+                .get("reference_timestamp")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+
+        if measurement
+            .get("value")
+            .is_some_and(|value| !value.is_null())
+        {
+            supported_species += 1;
+        }
+
+        measurements.insert(spec.key.to_string(), measurement);
+        source_urls.push(Value::String(url));
+    }
+
+    if supported_species == 0 {
+        bail!(
+            "No pollen measurements were returned for station '{}'",
+            station.id
+        );
+    }
+
+    Ok(json!({
+        "available": true,
+        "source": {
+            "provider": "MeteoSwiss",
+            "service": "Official pollen measurement layers",
+            "station_catalog_url": format!("{}/collections/{}/items", STAC_ROOT, POLLEN_COLLECTION_ID),
+            "measurement_urls": source_urls,
+        },
+        "nearest_station": {
+            "id": station.id,
+            "station_name": station.station_name,
+            "distance_km": round_to_precision(
+                haversine_distance_km(
+                    point_latitude,
+                    point_longitude,
+                    station.latitude,
+                    station.longitude,
+                ),
+                1,
+            ),
+            "coordinates_wgs84": {
+                "lat": round_to_precision(station.latitude, 4),
+                "lon": round_to_precision(station.longitude, 4),
+            },
+        },
+        "reference_timestamp": reference_timestamp,
+        "measurements": Value::Object(measurements),
+    }))
+}
+
+async fn nearest_pollen_station(
+    point_latitude: f64,
+    point_longitude: f64,
+) -> Result<PollenStationMetadata> {
+    let url = format!("{}/collections/{}/items", STAC_ROOT, POLLEN_COLLECTION_ID);
+    let collection: mcp_engine::StacItemCollection = fetch_json(&url).await?;
+    let mut nearest_station = None;
+    let mut nearest_distance_km = f64::INFINITY;
+
+    for item in collection.features {
+        let Ok(station) = pollen_station_metadata(&item) else {
+            continue;
+        };
+        let distance_km = haversine_distance_km(
+            point_latitude,
+            point_longitude,
+            station.latitude,
+            station.longitude,
+        );
+
+        if distance_km < nearest_distance_km {
+            nearest_distance_km = distance_km;
+            nearest_station = Some(station);
+        }
+    }
+
+    nearest_station.ok_or_else(|| anyhow!("No pollen station metadata was available"))
+}
+
+fn pollen_station_metadata(item: &mcp_engine::StacItem) -> Result<PollenStationMetadata> {
+    let title = item
+        .properties
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or(item.id.as_str())
+        .to_string();
+    let geometry = item
+        .geometry
+        .as_ref()
+        .ok_or_else(|| anyhow!("Pollen station '{}' is missing geometry", item.id))?;
+
+    if geometry.coordinates.len() < 2 {
+        bail!("Pollen station '{}' is missing coordinates", item.id);
+    }
+
+    Ok(PollenStationMetadata {
+        id: item.id.to_ascii_uppercase(),
+        station_name: title,
+        longitude: geometry.coordinates[0],
+        latitude: geometry.coordinates[1],
+    })
+}
+
+fn build_pollen_measurement_summary(feature: &mcp_engine::GeoJsonFeature) -> Value {
+    json!({
+        "value": parse_measurement_value(&feature.properties.value, Some(99_999.0)),
+        "unit": feature.properties.unit,
+        "reference_timestamp": normalize_reference_timestamp(&feature.properties.reference_ts),
+    })
 }
 
 async fn fetch_nabel_air_quality_current(point: &ForecastPoint) -> Value {
@@ -1177,6 +1401,24 @@ fn euclidean_distance_km(east_a: f64, north_a: f64, east_b: f64, north_b: f64) -
     let east_delta = east_a - east_b;
     let north_delta = north_a - north_b;
     (east_delta.mul_add(east_delta, north_delta * north_delta)).sqrt() / 1000.0
+}
+
+fn haversine_distance_km(
+    latitude_a: f64,
+    longitude_a: f64,
+    latitude_b: f64,
+    longitude_b: f64,
+) -> f64 {
+    let earth_radius_km = 6371.0;
+    let latitude_delta = (latitude_b - latitude_a).to_radians();
+    let longitude_delta = (longitude_b - longitude_a).to_radians();
+    let latitude_a = latitude_a.to_radians();
+    let latitude_b = latitude_b.to_radians();
+
+    let a = (latitude_delta / 2.0).sin().powi(2)
+        + latitude_a.cos() * latitude_b.cos() * (longitude_delta / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+    earth_radius_km * c
 }
 
 fn numeric_summary(rows: &[Value], field_name: &str) -> Value {
@@ -2006,6 +2248,17 @@ mod tests {
                 "mean": 4.4
             }
         });
+        let pollen_current = json!({
+            "available": true,
+            "nearest_station": {
+                "id": "PBE"
+            },
+            "measurements": {
+                "grass": {
+                    "value": 31.0
+                }
+            }
+        });
         let air_quality_current = json!({
             "available": true,
             "measurements_ug_m3": {
@@ -2017,6 +2270,7 @@ mod tests {
         let summary = build_forecast_summary(
             &hourly_breakdown,
             uv_index,
+            pollen_current,
             air_quality_current,
             air_quality_aqi,
         );
@@ -2031,6 +2285,15 @@ mod tests {
         );
         assert_eq!(summary["uv_index"]["available"], json!(true));
         assert_eq!(summary["uv_index"]["daily_max_summary"]["max"], json!(5.2));
+        assert_eq!(summary["pollen_current"]["available"], json!(true));
+        assert_eq!(
+            summary["pollen_current"]["nearest_station"]["id"],
+            json!("PBE")
+        );
+        assert_eq!(
+            summary["pollen_current"]["measurements"]["grass"]["value"],
+            json!(31.0)
+        );
         assert_eq!(summary["air_quality_current"]["available"], json!(true));
         assert_eq!(
             summary["air_quality_current"]["measurements_ug_m3"]["o3"],
@@ -2096,6 +2359,24 @@ mod tests {
             normalize_station_name("Duebendorf-Empa"),
             normalize_station_name("Dübendorf-Empa")
         );
+    }
+
+    #[test]
+    fn test_pollen_station_metadata_reads_geometry_and_title() {
+        let station = pollen_station_metadata(&mcp_engine::StacItem {
+            id: "pbe".to_string(),
+            geometry: Some(mcp_engine::StacPointGeometry {
+                coordinates: vec![7.4474, 46.948],
+            }),
+            properties: HashMap::from([("title".to_string(), json!("Bern"))]),
+            assets: HashMap::new(),
+        })
+        .unwrap();
+
+        assert_eq!(station.id, "PBE");
+        assert_eq!(station.station_name, "Bern");
+        assert_eq!(station.longitude, 7.4474);
+        assert_eq!(station.latitude, 46.948);
     }
 
     #[test]

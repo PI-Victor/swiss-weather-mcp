@@ -201,9 +201,17 @@ pub struct StacItemCollection {
 pub struct StacItem {
     pub id: String,
     #[serde(default)]
+    pub geometry: Option<StacPointGeometry>,
+    #[serde(default)]
     pub properties: HashMap<String, serde_json::Value>,
     #[serde(default)]
     pub assets: HashMap<String, StacAsset>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct StacPointGeometry {
+    #[serde(default)]
+    pub coordinates: Vec<f64>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -348,7 +356,7 @@ pub fn tools_list_response(id: serde_json::Value) -> McpResponse {
         },
         ToolInfo {
             name: "get_local_forecast".to_string(),
-            description: "Get the latest MeteoSwiss local forecast for a point with a daily summary and hourly breakdown. The response includes temperature, precipitation totals and probability, wind, gusts, wind direction, cloud cover, sunshine duration, global radiation, diffuse radiation, weather icon codes, Copernicus UV, and current FOEN NABEL pollutant measurements for the nearest official station.\n\nParameters:\n- point_query: point ID, station abbreviation, postal code, or point name\n- hours: Optional number of hourly forecast timestamps to return (default 24)."
+            description: "Get the latest MeteoSwiss local forecast for a point with a daily summary and hourly breakdown. The response includes temperature, precipitation totals and probability, wind, gusts, wind direction, cloud cover, sunshine duration, global radiation, diffuse radiation, weather icon codes, Copernicus UV, current pollen from the nearest official pollen station, and current FOEN NABEL pollutant measurements for the nearest official station.\n\nParameters:\n- point_query: point ID, station abbreviation, postal code, or point name\n- hours: Optional number of hourly forecast timestamps to return (default 24)."
                 .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",

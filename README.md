@@ -4,6 +4,48 @@
 
 The server reads one JSON-RPC request per line from `stdin` and writes one JSON-RPC response per line to `stdout`.
 
+## Install
+
+Install from crates.io:
+
+```bash
+cargo install swiss-weather-mcp
+```
+
+## Configure In An MCP Client
+
+`swiss-weather-mcp` is a stdio MCP server. There is no separate config file, no required environment variables, and no command-line arguments to set up. Configure your MCP client to launch the installed binary directly.
+
+Example MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "swiss-weather": {
+      "command": "swiss-weather-mcp"
+    }
+  }
+}
+```
+
+If you want to run it from source instead of an installed binary:
+
+```json
+{
+  "mcpServers": {
+    "swiss-weather": {
+      "command": "cargo",
+      "args": [
+        "run",
+        "--quiet",
+        "--manifest-path",
+        "/absolute/path/to/swiss-weather-mcp/Cargo.toml"
+      ]
+    }
+  }
+}
+```
+
 Repository and homepage:
 
 - <https://github.com/pi-victor/swiss-weather-mcp>
@@ -48,12 +90,6 @@ The implementation currently pulls data from these upstream sources:
 Requirements:
 
 - Rust stable
-
-Install from crates.io:
-
-```bash
-cargo install swiss-weather-mcp
-```
 
 Common commands:
 
@@ -265,7 +301,7 @@ Notes:
 
 ### `get_local_forecast`
 
-Returns the latest local forecast for a point, with daily summary rows, hourly rows, computed summary blocks, UV, and current air quality.
+Returns the latest local forecast for a point, with daily summary rows, hourly rows, computed summary blocks, UV, current pollen, and current air quality.
 
 Arguments:
 
@@ -412,7 +448,7 @@ An array of daily rows. Each row contains:
 
 ### `summary`
 
-`summary` is a derived rollup built from `hourly_breakdown` plus external UV and air-quality lookups.
+`summary` is a derived rollup built from `hourly_breakdown` plus external UV, pollen, and air-quality lookups.
 
 Fields:
 
@@ -426,6 +462,7 @@ Fields:
 - `diffuse_radiation_w_m2`
 - `cloud_cover_fraction`
 - `uv_index`
+- `pollen_current`
 - `air_quality_current`
 - `air_quality_aqi`
 
@@ -563,6 +600,56 @@ Unavailable shape:
 }
 ```
 
+#### `pollen_current`
+
+Current behavior:
+
+- Source: MeteoSwiss official pollen station catalog and hourly pollen measurement layers
+- The server chooses the nearest official pollen station using the forecast point WGS84 coordinates
+
+Available shape:
+
+```json
+{
+  "available": true,
+  "source": {
+    "provider": "MeteoSwiss",
+    "service": "Official pollen measurement layers"
+  },
+  "nearest_station": {
+    "id": "PBE",
+    "station_name": "Bern",
+    "distance_km": 14.2,
+    "coordinates_wgs84": {
+      "lat": 46.948,
+      "lon": 7.4474
+    }
+  },
+  "reference_timestamp": "2026-04-20T10:00:00Z",
+  "measurements": {
+    "alder": {
+      "value": 12.0,
+      "unit": "grains/m3",
+      "reference_timestamp": "2026-04-20T10:00:00Z"
+    },
+    "grass": {
+      "value": 31.0,
+      "unit": "grains/m3",
+      "reference_timestamp": "2026-04-20T10:00:00Z"
+    }
+  }
+}
+```
+
+Unavailable shape:
+
+```json
+{
+  "available": false,
+  "reason": "Official MeteoSwiss pollen measurements are unavailable for this point or time window. ..."
+}
+```
+
 #### `air_quality_aqi`
 
 Current behavior:
@@ -586,6 +673,7 @@ Shape:
 Possible keys:
 
 - `uv_index`
+- `pollen_current`
 - `air_quality_current`
 - `air_quality_aqi`
 
