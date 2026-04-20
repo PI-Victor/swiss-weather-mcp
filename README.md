@@ -49,6 +49,12 @@ Requirements:
 
 - Rust stable
 
+Install from crates.io:
+
+```bash
+cargo install swiss-weather-mcp
+```
+
 Common commands:
 
 ```bash
